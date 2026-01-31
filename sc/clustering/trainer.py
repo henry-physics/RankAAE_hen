@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import shapiro, spearmanr
 
 import torch
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(False)
 from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
@@ -86,6 +86,12 @@ class Trainer:
                 "Val_Recon,Train_Smooth,Val_Smooth,Train_Mutual_Info,Val_Mutual_Info"
         )
         
+        
+        best_combined_metric = float("inf")
+        best_metrics = None 
+        best_epoch = None 
+
+
         for epoch in range(self.max_epoch):
             # Set the networks in train mode (apply dropout when needed)
             self.encoder.train()
@@ -295,8 +301,16 @@ class Trainer:
                        aux_loss_val.item() if aux_in is not None else 0]
             
             combined_metric = - (np.array(self.metric_weights) * np.array(metrics)).sum()
-            if combined_metric > best_combined_metric:
+
+            if not np.isfinite(combined_metric):
+                combined_metric = float("inf")
+
+            
+            
+            if combined_metric < best_combined_metric:
                 best_combined_metric = combined_metric
+                best_metrics = metrics 
+                best_epoch = epoch 
                 best_chpt_file = f"{chkpt_dir}/epoch_{epoch:06d}_loss_{combined_metric:07.6g}.pt"
                 torch.save(model_dict, best_chpt_file)
 
@@ -312,7 +326,15 @@ class Trainer:
         if best_chpt_file is not None:
             shutil.copy2(best_chpt_file, f'{self.work_dir}/best.pt')
 
-        return metrics
+
+        return {
+            "best_combined_metric": float(best_combined_metric),
+            "best_epoch": int(best_epoch) if best_epoch is not None else None,
+            "best_metrics": best_metrics,
+            "last_metrics": metrics,
+        }
+
+
 
 
     def zerograd(self):
@@ -402,7 +424,7 @@ class Trainer:
         self.schedulers = {name:
             ReduceLROnPlateau(
                 optimizer, mode="min", factor=self.sch_factor, patience=self.sch_patience, 
-                cooldown=0, threshold=0.01,verbose=self.verbose
+                cooldown=0, threshold=0.01
             ) 
             for name, optimizer in self.optimizers.items()
         }
