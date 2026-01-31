@@ -44,7 +44,7 @@ gen_beta: 1.1
 # Report Parameters
 output_name: report_HB
 top_n: 8
-gpu: false
+gpu: true
 
 discrete_idx: null
 #descriptor_names: ["HB_sum", "w_nu_sum", "w_nu_asym", "w_theta_sum",  "HB_out_avg_len", "OH_asym", "HOH_ang", "d54",  "N_inter"]
