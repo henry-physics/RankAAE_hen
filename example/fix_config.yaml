@@ -4,7 +4,7 @@ trials: 4 # ignored (except it gets copied over to best_config)
 timeout: 10
 verbose: true
 max_epoch: 500  # pruning doesn't kick in until 40 
-batch_size: 64 
+batch_size: 128 
 
 ### optuna 
 #
@@ -24,7 +24,7 @@ optuna:
     weight_decay: {type: uniform, low: 0.0001, high: 0.01}
     spec_noise: {type: uniform, low: 0.005, high: 0.025}
     alpha_limit: {type: uniform, low: 0.3, high: 0.75}
-    batch_size: {type: categorical, choices: [64,128,256,512]}
+    #batch_size: {type: categorical, choices: [64,128,256,512]}
     n_layers: {type: categorical, choices: [2,3,4,5,6]}
     FC_discriminator_layers: {type: categorical, choices: [2,3,4]}
     #alpha_flat_step: {type: int, low: 400, high: max_epoch, step: 50}
