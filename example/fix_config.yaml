@@ -24,8 +24,8 @@ optuna:
     weight_decay: {type: uniform, low: 0.0001, high: 0.01}
     spec_noise: {type: uniform, low: 0.005, high: 0.025}
     alpha_limit: {type: uniform, low: 0.3, high: 0.75}
-    batch_size: {type: categorical, choices: [32,64,76,128]}
-    n_layers: {type: categorical, choices: [2,3,4,5]}
+    batch_size: {type: categorical, choices: [64,128,256,512]}
+    n_layers: {type: categorical, choices: [2,3,4,5,6]}
     FC_discriminator_layers: {type: categorical, choices: [2,3,4]}
     #alpha_flat_step: {type: int, low: 400, high: max_epoch, step: 50}
     #epoch_stop_smooth: {type: int, low: 400, high: max_epoch, step: 50}
