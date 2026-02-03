@@ -10,21 +10,6 @@ from pathlib import Path
 # dont forget to adjust train/val split in trainer.py NOT HERE
 # dont forget to adjust random seed for shuffling jjj into bins 
 
-def get_ids(self):
-    """
-    Returns list[str] IDs in a stable 'i_jjj' format, regardless of index type.
-    """
-    idx = self.atom_index
-    if len(idx) == 0:
-        return []
-    first = idx[0]
-    # MultiIndex element is typically a tuple: (i, jjj)
-    if isinstance(first, tuple) and len(first) >= 2:
-        return [f"{i}_{int(jjj):03d}" for (i, jjj) in idx]
-    # already string-like "i_jjj"
-    return [str(x) for x in idx]
-
-
 class AuxSpectraDataset(Dataset):
     def __init__(self, csv_fn, split_portion, train_val_test_ratios=(0.8, 0.2, 0.0),
                  n_aux=0, transform=None):
@@ -54,6 +39,20 @@ class AuxSpectraDataset(Dataset):
 
     def _process_metadata(self, file_path, split_ratio):
         return {"path": file_path, "train_test_val_split_ratio": split_ratio}
+
+    def get_ids(self):
+    """
+    Returns list[str] IDs in a stable 'i_jjj' format, regardless of index type.
+    """
+    idx = self.atom_index
+    if len(idx) == 0:
+        return []
+    first = idx[0]
+    # MultiIndex element is typically a tuple: (i, jjj)
+    if isinstance(first, tuple) and len(first) >= 2:
+        return [f"{i}_{int(jjj):03d}" for (i, jjj) in idx]
+    # already string-like "i_jjj"
+    return [str(x) for x in idx]
 
     def _get_jjj_values(self, df: pd.DataFrame) -> np.ndarray:
         """
