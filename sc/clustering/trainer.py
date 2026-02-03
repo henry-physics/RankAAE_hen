@@ -434,7 +434,7 @@ class Trainer:
     def from_data(
         cls, csv_fn, 
         igpu=0, verbose=True, work_dir='.', 
-        train_ratio=0.7, validation_ratio=0.15, test_ratio=0.15, 
+        train_ratio=0.8, validation_ratio=0.2, test_ratio=0.0, 
         config_parameters = Parameters({}),
         logger = logging.getLogger("from_data"),
         loss_logger = logging.getLogger("losses")
