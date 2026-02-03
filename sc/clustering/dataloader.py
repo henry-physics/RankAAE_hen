@@ -41,9 +41,7 @@ class AuxSpectraDataset(Dataset):
         return {"path": file_path, "train_test_val_split_ratio": split_ratio}
 
     def get_ids(self):
-        """
-        Returns list[str] IDs in a stable 'i_jjj' format, regardless of index type.
-        """
+
         idx = self.atom_index
         if len(idx) == 0:
             return []
@@ -55,10 +53,7 @@ class AuxSpectraDataset(Dataset):
         return [str(x) for x in idx]
 
     def _get_jjj_values(self, df: pd.DataFrame) -> np.ndarray:
-        """
-        Returns jjj as integers in [0,127] for each row.
-        Supports either MultiIndex (i, jjj) or single index "i_jjj".
-        """
+
         if getattr(df.index, "nlevels", 1) >= 2:
             jjj = df.index.get_level_values(1)
             # allow '000' strings or ints
