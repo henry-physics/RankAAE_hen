@@ -4,14 +4,14 @@ trials: 4 # ignored (except it gets copied over to best_config)
 timeout: 10
 verbose: true
 max_epoch: 500  # pruning doesn't kick in until 40 
-batch_size: 128 
+batch_size: 256 
 
 ### optuna 
 #
 optuna:
   enabled: true
-  n_trials: 16     ### pruning doesnt' kick in until history of 5 trials 
-  n_parallel: 2 
+  n_trials: 24     ### pruning doesnt' kick in until history of 5 trials 
+  n_parallel: 12 
   direction: minimize
   storage: sqlite:///optuna.db
   study_name: HB_opt
@@ -27,7 +27,7 @@ optuna:
     #batch_size: {type: categorical, choices: [64,128,256,512]}
     n_layers: {type: categorical, choices: [2,3,4,5,6]}
     FC_discriminator_layers: {type: categorical, choices: [2,3,4]}
-    #alpha_flat_step: {type: int, low: 400, high: max_epoch, step: 50}
+    alpha_flat_step: {type: int, low: 500, high: 1200, step: 100}
     #epoch_stop_smooth: {type: int, low: 400, high: max_epoch, step: 50}
 
 
@@ -51,32 +51,27 @@ discrete_idx: null
 
 descriptor_names: 
 - HB_sum 
-- w_nu_sum 
-- a 
-- a
-- a 
-- a
-- a
-- a 
-- a
-- a 
-- a
-- a
-- a 
-- a
-- a 
-- a
-- a
-- a 
-- a
-- a
-- a 
-- a
-- a
- 
+- w_nu_max
+- w theta max 
+- HB out avg len 
+- LSI 
+- q
+- d_54
+- N inter 
+- dr0
+- dr1
+- dr2
+- dr3
+- dr30
+- dr32
+- dev norm sum 
+- edge meanabs 
+- edg std 
+- edg max abs 
+
 # Network Structure
-n_aux: 23 
-nstyle: 24
+n_aux: 18 
+nstyle: 21
 ae_form: FC
 dim_in: 1100 
 dim_out: 1100 # if ae_form==normal, dim_out is always set to 256
@@ -95,9 +90,9 @@ sch_factor: 0.1
 sch_patience: 100
 
 lr_base: 0.001
-lr_ratio_Corr: 4.0
+lr_ratio_Corr: 8.0
 lr_ratio_Mutual: 1
-lr_ratio_Reconn: 4.0
+lr_ratio_Reconn: 10.0
 lr_ratio_Smooth: 1.0 
 lr_ratio_dis: 1
 lr_ratio_gen: 1
@@ -106,7 +101,7 @@ spec_noise: 0.02
 use_flex_spec_target: true
 weight_decay: 0.01
 kendall_activation: true
-epoch_stop_smooth: 500
+epoch_stop_smooth: 1200
 
 
 
