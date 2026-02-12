@@ -1,107 +1,66 @@
 # System settings
-data_file: HB_data.csv 
-trials: 4 # ignored (except it gets copied over to best_config)
+data_file:  HB_data.csv 
+trials: 3
 timeout: 10
 verbose: true
-max_epoch: 500  # pruning doesn't kick in until 40 
-batch_size: 256 
-
-### optuna 
-#
-optuna:
-  enabled: true
-  n_trials: 24     ### pruning doesnt' kick in until history of 5 trials 
-  n_parallel: 12 
-  direction: minimize
-  storage: sqlite:///optuna.db
-  study_name: HB_opt
-
-  search_space:
-    lr_base: {type: uniform, low: 0.00001, high: 0.001}
-    dropout_rate: {type: uniform, low: 0.01, high: 0.3}
-    dis_dropout_rate: {type: uniform, low: 0.01, high: 0.075}
-    dis_noise: {type: uniform, low: 0.1, high: 0.6}
-    weight_decay: {type: uniform, low: 0.0001, high: 0.01}
-    spec_noise: {type: uniform, low: 0.005, high: 0.025}
-    alpha_limit: {type: uniform, low: 0.3, high: 0.75}
-    #batch_size: {type: categorical, choices: [64,128,256,512]}
-    n_layers: {type: categorical, choices: [2,3,4,5,6]}
-    FC_discriminator_layers: {type: categorical, choices: [2,3,4]}
-    alpha_flat_step: {type: int, low: 500, high: 1200, step: 100}
-    #epoch_stop_smooth: {type: int, low: 400, high: max_epoch, step: 50}
-
-
+max_epoch: 600
+batch_size: 32
 
 gradient_reversal: true # if true, `alpha_flat_step` and `alpha_limit` must be specified.
-alpha_flat_step: 500 # Alpha will reach to `alpha_limit` and stay constant after `alpha_flat_step` ecpochs.
-alpha_limit: 0.7
+alpha_flat_step: 739 # Alpha will reach to `alpha_limit` and stay constant after `alpha_flat_step` ecpochs.
+# alpha_limit: 0.7172
+alpha_limit: 0.4172
 decoder_activation: Softplus
 dis_beta: 1.1
 dis_dropout_rate: 0.056
-dis_noise: 0.55
+dis_noise: 0.56
 gen_beta: 1.1
 
 # Report Parameters
-output_name: report_HB
+output_name: report_HB_13_Quad
 top_n: 8
-gpu: true
+gpu: false
 
-discrete_idx: null
-#descriptor_names: ["HB_sum", "w_nu_sum", "w_nu_asym", "w_theta_sum",  "HB_out_avg_len", "OH_asym", "HOH_ang", "d54",  "N_inter"]
+## fit method 
+fit_method: Quadratic   # Linear, Quadratic, or Isotonic-regression 
 
-descriptor_names: 
-- HB_sum 
-- w_nu_max
-- w theta max 
-- HB out avg len 
-- LSI 
-- q
-- d_54
-- N inter 
-- dr0
-- dr1
-- dr2
-- dr3
-- dr30
-- dr32
-- dev norm sum 
-- edge meanabs 
-- edg std 
-- edg max abs 
+shuffle_data: true
+random_seed: 1
+aux_names: ["nu", "theta", "R", "q", "ring" ]
+
 
 # Network Structure
-n_aux: 18 
-nstyle: 21
+n_aux: 5
+nstyle: 8
 ae_form: FC
-dim_in: 1100 
-dim_out: 1100 # if ae_form==normal, dim_out is always set to 256
+dim_in: 550
+dim_out: 550 # if ae_form==normal, dim_out is always set to 256
 n_layers: 4 # FC only
 FC_discriminator_layers: 3 # used only if use_cnn_discriminator==false
 use_cnn_discriminator: false
-discrete_max_classes: 4
 
-# new - henry 
-n_sampling: 2000 
-plot_residual: false
+n_sampling: 5000
+plot_residual: false 
+
 
 # Training Parameters
-dropout_rate: 0.05
+dropout_rate: 0.1
 sch_factor: 0.1
 sch_patience: 100
 
-lr_base: 0.001
-lr_ratio_Corr: 8.0
+lr_base: 0.0008
+lr_ratio_Corr: 10
 lr_ratio_Mutual: 1
-lr_ratio_Reconn: 10.0
-lr_ratio_Smooth: 1.0 
+lr_ratio_Reconn: 10
+lr_ratio_Smooth: 1
 lr_ratio_dis: 1
-lr_ratio_gen: 1
+lr_ratio_gen: 10
 optimizer_name: AdamW
 spec_noise: 0.02
 use_flex_spec_target: true
 weight_decay: 0.01
 kendall_activation: true
-epoch_stop_smooth: 1200
+epoch_stop_smooth: 600
 
 
 
