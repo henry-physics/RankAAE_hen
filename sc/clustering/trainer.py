@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import shapiro, spearmanr
 
 import torch
-torch.autograd.set_detect_anomaly(True)
+#torch.autograd.set_detect_anomaly(True)
 from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
