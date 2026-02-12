@@ -12,349 +12,216 @@ import sc.report.analysis as analysis
 import sc.report.analysis_new as analysis_new
 from sc.utils.parameter import Parameters
 from sc.clustering.dataloader import AuxSpectraDataset
-import re 
 
 
-def _safe_filename(s: str) -> str:
-    s = str(s).strip()
-    s = re.sub(r'[^a-zA-Z0-9._-]+', '_', s)
-    return s[:120]
-
-def save_diagonal_scatter_pngs(test_ds, model, config, out_dir, device=torch.device("cpu")):
-    os.makedirs(out_dir, exist_ok=True)
-
-    encoder = model['Encoder']
-
-    test_spec = torch.tensor(test_ds.spec, dtype=torch.float32, device=device)
-    test_styles = encoder(test_spec).detach().cpu().numpy()
-    descriptors = np.asarray(test_ds.aux)
-
-    n_pair = min(test_styles.shape[1], descriptors.shape[1])
-    test_styles = test_styles[:, :n_pair]
-    descriptors = descriptors[:, :n_pair]
-
-    descriptor_names = getattr(config, "descriptor_names",
-                               [f"Descriptor_{i}" for i in range(descriptors.shape[1])])
-
-    discrete_idx = getattr(config, "discrete_idx", None)
-    if discrete_idx is not None:
-        discrete_idx = int(discrete_idx)
-        if discrete_idx < 0 or discrete_idx >= n_pair:
-            discrete_idx = None
-
-    # only continuous dims on diagonal (skip discrete, if any)
-    if discrete_idx is None:
-        cont_idx = list(range(n_pair))
-    else:
-        cont_idx = [i for i in range(n_pair) if i != discrete_idx]
-
-    styles_cont = test_styles[:, cont_idx]
-    desc_cont   = descriptors[:, cont_idx]
-    names_cont  = [descriptor_names[i] for i in cont_idx]
-
-    for k in range(len(cont_idx)):
-        style_i = cont_idx[k]
-        name = names_cont[k]
-
-        fig, ax = plt.subplots(figsize=(4.5, 4.0), dpi=160)
-        acc = analysis.get_descriptor_style_correlation(
-            styles_cont[:, k],
-            desc_cont[:, k],
-            ax=ax,
-            choice=["R2", "Spearman"],
-            fit=True,
-        )
-
-        r2 = acc["Linear"]["R2"]
-        sp = acc["Spearman"]
-        ax.set_title(f"{name} vs style_{style_i + 1}\nR2={r2:.3f}, Spearman={sp:.3f}", fontsize=10)
-
-        out_path = os.path.join(out_dir, f"diag_{k+1:02d}_style{style_i+1:02d}_{_safe_filename(name)}.png")
-        fig.savefig(out_path, bbox_inches="tight")
-        plt.close(fig)
-
-
-
-def sorting_algorithm(x, inter_weight=-1.0, recon_power=0.0, desc_weights=None, eps=1e-12):
+def sorting_algorithm(x):
     """
-    x columns:
-      0: Inter-style Corr        (want small)
-      1: Reconstruction Err      (want small)
-      2..: Style-Descriptor Corr (want large)
+    x columns are:
+      0: Inter-style Corr (lower is better)
+      1: Reconstruction Err (lower is better)
+      2..: Spearman correlations (higher is better)
+    Input x is typically z-scores from analysis.sort_all_models().
     """
+    if x.shape[1] < 2:
+        return np.zeros((x.shape[0],), dtype=float)
 
-    x = np.asarray(x)
-    n = x.shape[1]
-    assert n >= 2, "Need at least [inter_corr, recon_err] columns"
+    w = np.ones(x.shape[1], dtype=float)
+    w[0] = -1.0  # penalize inter-style corr
+    w[1] = -1.0  # penalize recon err
+    return (x * w).sum(axis=1)
 
-    # descriptor weights (one per descriptor column, columns 2..end)
-    n_desc = max(0, n - 2)
-    if desc_weights is None:
-        desc_weights = np.ones(n_desc)          # default: treat new descriptors equally
+def plot_descriptor_style_scatter_matrix(
+    styles,              # (N, n_styles)
+    descriptors,         # (N, n_aux)
+    aux_names=None,
+    fit_method="Linear",     # curve to DRAW: "Linear", "Quadratic", "Isotonic"
+    fit=True,
+    max_points=None,
+    use_square=True,         # if True -> N×N with N=min(n_styles,n_aux)
+    title="Descriptor vs Style scatter matrix",
+):
+    if descriptors is None:
+        return None
+
+    styles = np.asarray(styles)
+    descriptors = np.asarray(descriptors)
+
+    n_styles = styles.shape[1]
+    n_aux = descriptors.shape[1]
+
+    if aux_names is None:
+        aux_names = [f"AUX_{i+1}" for i in range(n_aux)]
+    if len(aux_names) != n_aux:
+        raise ValueError(f"aux_names must have length n_aux={n_aux}, got {len(aux_names)}")
+
+    # optional subsample
+    Npts = styles.shape[0]
+    if (max_points is not None) and (Npts > max_points):
+        idx = np.random.choice(Npts, size=max_points, replace=False)
+        styles = styles[idx]
+        descriptors = descriptors[idx]
+
+    # choose which block to plot
+    if use_square:
+        n = min(n_styles, n_aux)
+        styles_plot = styles[:, :n]
+        desc_plot = descriptors[:, :n]
+        aux_names_plot = aux_names[:n]
+        n_rows, n_cols = n, n
     else:
-        desc_weights = np.asarray(desc_weights, dtype=float)
-        # pad/truncate to match number of descriptor columns
-        if len(desc_weights) < n_desc:
-            desc_weights = np.pad(desc_weights, (0, n_desc - len(desc_weights)), constant_values=1.0)
-        else:
-            desc_weights = desc_weights[:n_desc]
+        styles_plot = styles
+        desc_plot = descriptors
+        aux_names_plot = aux_names
+        n_rows, n_cols = n_aux, n_styles
 
-    inter_term = inter_weight * x[:, 0]
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(3.2 * n_cols, 3.0 * n_rows),
+        constrained_layout=True,
+        dpi=120
+    )
+    axes = np.atleast_2d(axes)
+    fig.suptitle(title)
 
-    if n_desc > 0:
-        desc_term = (x[:, 2:] * desc_weights).sum(axis=1)
+    for i_aux in range(n_rows):
+        for j_style in range(n_cols):
+            ax = axes[i_aux, j_style]
+            x = styles_plot[:, j_style]
+            y = desc_plot[:, i_aux]
+
+            # Always compute Spearman + Linear (for R^2), and optionally another fit to draw
+            choice = ["Spearman", fit_method]
+
+            draw_fit = fit and (i_aux == j_style)
+
+            acc = analysis.get_descriptor_style_correlation(
+                x, y,
+                ax=ax,
+                choice=choice,
+                fit=draw_fit
+            )
+            
+            sp = acc.get("Spearman", None)
+            r2 = acc.get(fit_method, {}).get("R2", None)
+
+            sp_str = "NA" if sp is None else f"{sp:.2f}"
+            r2_str = "NA" if r2 is None else f"{r2:.2f}"
+
+            ax.set_title(
+                f"S{j_style+1} vs {aux_names_plot[i_aux]}\n"
+                f"Spearman={sp_str}, {fit_method} R2={r2_str}",
+                fontsize=9
+            )
+            
+
+            if i_aux == n_rows - 1:
+                ax.set_xlabel(f"style_{j_style+1}")
+            else:
+                ax.set_xlabel("")
+                ax.tick_params(labelbottom=False)
+
+            if j_style == 0:
+                ax.set_ylabel(aux_names_plot[i_aux])
+            else:
+                ax.set_ylabel("")
+                ax.tick_params(labelleft=False)
+
+    return fig
+
+
+def plot_report(test_ds, model, config=None, title="report", device=torch.device("cpu")):
+    n_aux = int(getattr(config, "n_aux", 0))
+    aux_names = getattr(config, "aux_names", None)
+    if aux_names is None:
+        aux_names = [f"AUX_{i+1}" for i in range(n_aux)]
     else:
-        desc_term = 0.0
+        if len(aux_names) != n_aux:
+            raise ValueError(f"aux_names must have length n_aux={n_aux}, got {len(aux_names)}")
 
-    numerator = inter_term + desc_term
+    plot_residual = bool(getattr(config, "plot_residual", False))
+    n_sampling = int(getattr(config, "n_sampling", 1000))
 
-    # If you ever set all weights so numerator becomes 0 for everything,
-    # keep an offset so score isn't identically 0.
-    offset = 1.0 if np.allclose(numerator, 0.0) else 0.0
-
-    recon = np.clip(x[:, 1], eps, None)
-    denom = recon ** recon_power   # recon_power=0 => denom=1 (ignore recon)
-
-    return (offset + numerator) / denom
-
-
-### additional function to save individual plots 
-
-def save_style_variation_png(test_ds, model, config, out_path, device):
     encoder = model["Encoder"]
     decoder = model["Decoder"]
 
-    spec = torch.tensor(test_ds.spec, dtype=torch.float32, device=device)
-    styles = encoder(spec).detach().cpu().numpy()
-    grid = test_ds.grid
+    # evaluate for the title only
+    result = analysis.evaluate_model(test_ds, model, device=device)
+    style_correlation = result.get("Inter-style Corr", 0.0)
 
-    n_styles = styles.shape[1]
-    n_spec = 50
-
-    # pick your palette (see next section)
-    colors = plt.cm.viridis(np.linspace(0, 1, n_spec))  # RGBA array is fine
-
-    fig, axs = plt.subplots(
-        n_styles, 1,
-        figsize=(10, 3*n_styles),
-        constrained_layout=True,
-        dpi=150,
-        sharex=True
-    )
-    if n_styles == 1:
-        axs = [axs]
-
-    for i, ax in enumerate(axs):
-        analysis.plot_spectra_variation(
-            decoder, i,
-            true_range=True,
-            styles=styles,
-            n_spec=n_spec,
-            n_sampling=config.n_sampling,
-            device=device,
-            energy_grid=grid,
-            colors=colors,          # <---- custom colors here
-            plot_residual=getattr(config, "plot_residual", False),
-            ax=ax
-        )
-
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
-    
-    for i in range(n_styles):
-
-        true_range = True 
-        amplitude = [0,0]
-
-        if i == 0: 
-            true_range = False 
-            amplitude = [0,2]
-        if i ==3: 
-            true_range=False 
-            amplitude=[-2,1]
-
-        if i ==9: 
-            true_range=False 
-            amplitude = [-3,2]
-
-
-
-        fig, ax = plt.subplots(figsize=(10, 3), dpi=150)
-        
-        analysis.plot_spectra_variation(
-            decoder, i,
-            true_range=true_range,
-            styles=styles,
-            n_spec=n_spec,
-            n_sampling=config.n_sampling,
-            device=device,
-            energy_grid=grid,
-            amplitude=amplitude, 
-            colors=colors,
-            plot_residual=getattr(config, "plot_residual", False),
-            ax=ax
-        )
-        
-        #plt.show()  # Show each plot individually
-        plt.close(fig)
-
-def plot_report(test_ds, model, config=None, title='report', device=torch.device("cpu")):
-    plot_residual = getattr(config, "plot_residual", False)
-
-    encoder = model['Encoder']
-    decoder = model['Decoder']
-
-    # --- data ---
     test_spec = torch.tensor(test_ds.spec, dtype=torch.float32, device=device)
     test_grid = test_ds.grid
     test_styles = encoder(test_spec).detach().cpu().numpy()
-    descriptors = np.asarray(test_ds.aux)
-
-    # truncate to matching dims (prevents indexing surprises)
-    n_pair = min(test_styles.shape[1], descriptors.shape[1])
-    test_styles = test_styles[:, :n_pair]
-    descriptors = descriptors[:, :n_pair]
-
-    # names (YOU provide via config.descriptor_names)
-    descriptor_names = getattr(config, "descriptor_names",
-                              [f"Descriptor_{i}" for i in range(descriptors.shape[1])])
-
-    # discrete_idx == None (from YAML null) means: no discrete descriptor
-    discrete_idx = getattr(config, "discrete_idx", None)
-    if discrete_idx is not None:
-        discrete_idx = int(discrete_idx)
-        if discrete_idx < 0 or discrete_idx >= n_pair:
-            discrete_idx = None
-
-    has_discrete = (discrete_idx is not None)
-
-    # continuous indices
-    if discrete_idx is None:
-        cont_idx = list(range(n_pair))          # all continuous
-    else:
-        cont_idx = [i for i in range(n_pair) if i != discrete_idx]
-        
+    n_styles = test_styles.shape[1]
 
 
-    styles_cont = test_styles[:, cont_idx]
-    desc_cont = descriptors[:, cont_idx]
-    names_cont = [descriptor_names[i] for i in cont_idx]
-    n_cont = len(cont_idx)
+     
 
-    
-    discrete_max_classes = getattr(config, "discrete_max_classes", 10)
-    if discrete_idx is None:
-        discrete_max_classes = 0   # force: no discrete handling in evaluate_model()
+    descriptors = test_ds.aux
+    n_scatter = 0 if descriptors is None else descriptors.shape[1]
+    n_scatter = min(n_scatter, n_styles)
 
-    result = analysis.evaluate_model(
-        test_ds, model, device=device,
-        discrete_descriptor_max_classes=discrete_max_classes
+    # Layout: style-variation plots + one scatter per aux (aux_i vs style_i)
+    ncols = 2
+    nrows_style = int(np.ceil(n_styles / ncols))
+    nrows_scatter = int(np.ceil(n_scatter / ncols)) if n_scatter > 0 else 0
+    total_rows = nrows_style + nrows_scatter
+
+    fig, axes = plt.subplots(
+        total_rows, ncols,
+        figsize=(12, 4 * total_rows),
+        constrained_layout=True,
+        dpi=100
     )
-    
+    axes = np.atleast_2d(axes)
+    flat_axes = axes.reshape(-1)
 
+    fig.suptitle(
+        f"{title}\nMax |Spearman| between styles: {style_correlation:.4f}"
+    )
 
-    style_correlation = result["Inter-style Corr"]
-
-    # --- figure layout (minimal change but supports 5x5) ---
-    # make enough room: top spectra (2x3) + cont matrix (n_cont x n_cont) + discrete block (3 plots) + qq row
-    right_cols = 3 if has_discrete else 0 
-    ncols = n_cont + right_cols  # left: n_cont cols, right: 3 cols for discrete plots/qq
-    #nrows = 4 + n_cont + 1  # 4 rows for spectra, n_cont rows for matrix, 1 row for qq
-    nrows = n_cont + 1  # 4 rows for spectra, n_cont rows for matrix, 1 row for qq
-    fig = plt.figure(figsize=(4.2*ncols, 3.6*nrows), constrained_layout=True, dpi=160)
-    gs = fig.add_gridspec(nrows, ncols,wspace=0.35,hspace=0.55)
-
-    fig.suptitle(f"{title}\nLeast correlation: {style_correlation:.4f}")
-
-    # --- 6 style variation plots (same idea as before) ---
-    #spec_gs = gs[0:4, 0:ncols].subgridspec(2, 3)
-    #axs_spec = [fig.add_subplot(spec_gs[r, c]) for r in range(2) for c in range(3)]
-
-    #n_styles = test_styles.shape[1]
-    #axs_spec = axs_spec[:min(6, n_styles)]  # keep behavior similar to old code
-
-    #spectra_reconstructed = []
-    #for istyle, ax in enumerate(axs_spec):
-    #    _, spec_reconstructed = analysis.plot_spectra_variation(
-    #        decoder, istyle,
-    #        true_range=True,
-    #        styles=test_styles,
-    #        amplitude=2,
-    #        n_spec=50,
-    #        n_sampling=config.n_sampling,
-    #        device=device,
-    #        energy_grid=test_grid,
-    #        plot_residual=plot_residual,
-    #        ax=ax
-    #    )
-    #    spectra_reconstructed.append(spec_reconstructed)
-#
-#    if plot_residual and len(spectra_reconstructed) >= 2:
-#        residuals = [s[-1] - s[0] for s in spectra_reconstructed]
-#        cos_sim_matrix = cosine_similarity(residuals, residuals)
-#        for istyle, ax in enumerate(axs_spec):
-#            cos_sim_list = cos_sim_matrix[istyle]
-#            max_cos_sim = -1
-#            max_jstyle = None
-#            for jstyle, cos_sim in enumerate(cos_sim_list):
-#                if jstyle == istyle:
-#                    continue
-#                if cos_sim >= max_cos_sim:
-#                    max_cos_sim = cos_sim
-#                    max_jstyle = jstyle
-#            ax.text(0.95, 0.95, f"max_cos_sim: {max_cos_sim:.2f}\nwith style{max_jstyle+1}",
-#                    va="top", ha="right", transform=ax.transAxes, fontsize=12)
-
-    # --- continuous descriptor vs continuous style: NxN grid ---
-    mat_gs = gs[0:n_cont, 0:n_cont].subgridspec(n_cont, n_cont,wspace=0.4, hspace=0.6)
-
-    for row in range(n_cont):
-        for col in range(n_cont):
-            ax = fig.add_subplot(mat_gs[row, col])
-
-            plot_fit = (row == col)
-            result_choice = ["R2", "Spearman"]  # keep it simple/robust
-
-            accuracy = analysis.get_descriptor_style_correlation(
-                styles_cont[:, col],
-                desc_cont[:, row],
-                ax=ax,
-                choice=result_choice,
-                fit=plot_fit,
-            )
-
-            r2 = accuracy["Linear"]["R2"]
-            sp = accuracy["Spearman"]
-            ax.set_title(f"{names_cont[row]}\n {r2}/{sp}", fontsize=7.5, pad=2)
-    
-    n_qq = n_cont + (1 if has_discrete else 0)
-    qq_gs = gs[nrows-1, 0:n_qq].subgridspec(1, n_qq, wspace=0.4)
-
-    for j, idx in enumerate(cont_idx):
-        ax = fig.add_subplot(qq_gs[0, j])
-        sh = analysis.qqplot_normal(test_styles[:, idx], ax)
-        ax.set_title(f"style_{idx}: {sh:.2f}", fontsize=9)
-
-    if has_discrete:
-        ax_disc_qq = fig.add_subplot(qq_gs[0, n_cont])
-        sh = analysis.qqplot_normal(test_styles[:, discrete_idx], ax_disc_qq)
-        ax_disc_qq.set_title(f"style_{discrete_idx} (discrete): {sh:.2f}", fontsize=9)
-        
-
-
-
-    if has_discrete:
-        disc_gs = gs[0:3, n_cont:ncols].subgridspec(3, 1, hspace=0.35)
-        ax5 = fig.add_subplot(disc_gs[0, 0])
-        ax6 = fig.add_subplot(disc_gs[1, 0])
-        ax7 = fig.add_subplot(disc_gs[2, 0])
-
-        _ = analysis.get_confusion_matrix(
-            descriptors[:, discrete_idx].astype(int),
-            test_styles[:, discrete_idx],
-            ax=[ax5, ax6, ax7]
+    # ---- style variation ----
+    for istyle in range(n_styles):
+        ax = flat_axes[istyle]
+        analysis.plot_spectra_variation(
+            decoder,
+            istyle,
+            true_range=True,
+            styles=test_styles,
+            amplitude=2,
+            n_spec=50,
+            n_sampling=n_sampling,
+            device=device,
+            energy_grid=test_grid,
+            plot_residual=plot_residual,
+            ax=ax,
         )
-    
+
+    # hide unused axes in style section
+    for ax in flat_axes[n_styles : nrows_style * ncols]:
+        ax.axis("off")
+
+    # ---- scatter plots: aux_i vs style_i ----
+    fit_method = getattr(config, "fit_method", "Linear")
+    for i in range(n_scatter):
+        ax = flat_axes[nrows_style * ncols + i]
+        x = test_styles[:, i]
+        y = descriptors[:, i]
+        acc = analysis.get_descriptor_style_correlation(
+            x, y, ax=ax, choice=["Spearman", fit_method], fit=True
+        )
+        ax.set_xlabel(f"style_{i+1}")
+        ax.set_ylabel(aux_names[i])
+        r2 = acc.get(fit_method, {}).get("R2", None)
+        r2_str = "NA" if (r2 is None) else f"{r2:.2f}"
+        ax.set_title(
+            f"{aux_names[i]} vs style_{i+1}: Spearman={acc['Spearman']:.2f}, {fit_method} R2={r2_str}"
+        )
+                
+                
+
+    # hide remaining axes
+    for ax in flat_axes[nrows_style * ncols + n_scatter :]:
+        ax.axis("off")
 
     return fig
 
@@ -427,62 +294,80 @@ def main():
         data_file_list = [f for f in os.listdir(work_dir) if f.endswith('.csv')]
         assert len(data_file_list) == 1, "Which data file are you going to use?"
         file_name = data_file_list[0]
-    test_ds = AuxSpectraDataset(os.path.join(work_dir, file_name), split_portion = "val", n_aux = config.n_aux)
-    
-    try:
-        sorted_jobs = [config.plot_job]
-        output_path_best_model = os.path.join(work_dir, f"{config.output_name}_{sorted_jobs[0]}.png")
-    except:
-        #### Choose the 20 top model based on evaluation criteria ####
-        model_results = analysis.evaluate_all_models(jobs_dir, test_ds, device=device) # models are not sorted
-        model_results, sorted_jobs, fig_model_selection = analysis.sort_all_models( 
-            model_results, 
-            plot_score = True, 
-            top_n = config.top_n, 
-            sort_score = sorting_algorithm,
-            ascending = False, # best model has the highest score
-        ) # models are sorted
-        save_model_evaluations(work_dir, config.output_name, model_results)
+    test_ds = AuxSpectraDataset(
+        os.path.join(work_dir, file_name),
+        split_portion="val",
+        n_aux=config.n_aux,
+        shuffle=getattr(config, "shuffle_data", True),
+        random_seed=getattr(config, "random_seed", 0),
+    )
+     
+    fit_method = getattr(config, "fit_method", "Linear")
+
+    plot_job = getattr(config, "plot_job", None)
+    aux_names = getattr(config, "aux_names", None)
+
+    if plot_job is not None:
+        sorted_jobs = [plot_job]
+    else:
+        model_results = analysis.evaluate_all_models(jobs_dir, test_ds, device=device,fit_method=fit_method)
+        model_results, sorted_jobs, fig_model_selection = analysis.sort_all_models(
+            model_results,
+            plot_score=True,
+            top_n=config.top_n,
+            sort_score=sorting_algorithm,
+            ascending=False,
+            n_aux=config.n_aux,
+            aux_names=aux_names,
+        )
         
-        # genearte model selection scores plot
+
+        save_model_evaluations(work_dir, config.output_name, model_results)
+
         if fig_model_selection is not None:
             save_model_selection_plot(work_dir, config.output_name, fig_model_selection)
 
-        # save top 5 result 
         save_evaluation_result(work_dir, config.output_name, model_results, save_spectra=True, top_n=config.top_n)
-        output_path_best_model = os.path.join(work_dir, f"{config.output_name}_best_model.png")
-    finally:
-        # generate report for top model
-        job_dir = os.path.join(jobs_dir, sorted_jobs[0])
-        #ckpt = "best.pt" if os.path.exists(os.path.join(job_dir, "best.pt")) else "final.pt"
-        ckpt = "best.pt" 
-        top_model = torch.load(os.path.join(job_dir, ckpt), map_location=device, weights_only=False)
 
-        diag_out_dir =  os.path.join(work_dir, "plots")
+    # ---- common path from here on ----
+    job0 = sorted_jobs[0]
+    output_path_best_model = os.path.join(work_dir, f"{config.output_name}_{job0}.png")
 
-        diag_only = True
+    top_model = torch.load(
+        os.path.join(jobs_dir, job0, "final.pt"),
+        map_location=device,
+        weights_only=False
+    )
 
-        if diag_only:
-            save_diagonal_scatter_pngs(test_ds, top_model, config, diag_out_dir, device=device)
-            fig_top_model = None
-        else:
-            fig_top_model = plot_report(
-                test_ds,
-                top_model,
-                config=config,
-                title='-'.join([config.output_name, sorted_jobs[0]]),
-                device=device
-            )
-        if fig_top_model is not None:
-            fig_top_model.savefig(output_path_best_model, bbox_inches="tight")
+    fig_top_model = plot_report(
+        test_ds,
+        top_model,
+        config=config,
+        title='-'.join([config.output_name, job0]),
+        device=device
+    )
 
-    
+    fig_top_model.savefig(output_path_best_model, bbox_inches="tight")
+        
+    encoder = top_model["Encoder"]
+    encoder.eval()
+    test_spec = torch.tensor(test_ds.spec, dtype=torch.float32, device=device)
+    test_styles = encoder(test_spec).detach().cpu().numpy()
 
-    out_path_styles = os.path.join(work_dir, f"{config.output_name}_best_model_style_variations.png")
-    save_style_variation_png(test_ds, top_model, config, out_path_styles, device)  
+    fig_matrix = plot_descriptor_style_scatter_matrix(
+        test_styles,
+        test_ds.aux,
+        aux_names=getattr(config, "aux_names", None),
+        fit_method=getattr(config, "fit_method", "Linear"),
+        fit=True,              # set True if you want fit curves everywhere
+        max_points=None,        # e.g. 2000 if large
+        title='-'.join([config.output_name, job0, "scatter_matrix"])
+    )
 
-    if fig_top_model is not None: 
-        fig_top_model.savefig(output_path_best_model, bbox_inches="tight")
+    if fig_matrix is not None:
+        matrix_path = os.path.join(work_dir, f"{config.output_name}_{job0}_scatter_matrix.png")
+        fig_matrix.savefig(matrix_path, bbox_inches="tight")
+
     recon_evaluator = analysis_new.Reconstruct(name=config.output_name, device=device)
     recon_evaluator.evaluate(test_ds, top_model, path_to_save=work_dir)
     
