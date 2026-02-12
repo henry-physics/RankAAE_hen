@@ -19,7 +19,7 @@ gen_beta: 1.1
 # Report Parameters
 output_name: report_HB_13_Quad
 top_n: 8
-gpu: false
+gpu: true
 
 ## fit method 
 fit_method: Quadratic   # Linear, Quadratic, or Isotonic-regression 
