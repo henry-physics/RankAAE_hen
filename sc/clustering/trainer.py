@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import shapiro, spearmanr
 
 import torch
-torch.autograd.set_detect_anomaly(False)
+torch.autograd.set_detect_anomaly(True)
 from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
@@ -86,12 +86,6 @@ class Trainer:
                 "Val_Recon,Train_Smooth,Val_Smooth,Train_Mutual_Info,Val_Mutual_Info"
         )
         
-        
-        best_combined_metric = float("inf")
-        best_metrics = None 
-        best_epoch = None 
-
-
         for epoch in range(self.max_epoch):
             # Set the networks in train mode (apply dropout when needed)
             self.encoder.train()
@@ -110,10 +104,13 @@ class Trainer:
                 spec_in = spec_in.to(self.device)
                 if self.train_loader.dataset.aux is None:
                     aux_in = None
+                    n_aux = 0
                 else:
                     assert len(aux_in.size()) == 2
                     n_aux = aux_in.size()[-1]
                     aux_in = aux_in.to(self.device)
+                
+
                 
                 spec_in += torch.randn_like(spec_in, requires_grad=False) * self.spec_noise
                 styles = self.encoder(spec_in) # exclude the free style
@@ -301,16 +298,8 @@ class Trainer:
                        aux_loss_val.item() if aux_in is not None else 0]
             
             combined_metric = - (np.array(self.metric_weights) * np.array(metrics)).sum()
-
-            if not np.isfinite(combined_metric):
-                combined_metric = float("inf")
-
-            
-            
-            if combined_metric < best_combined_metric:
+            if combined_metric > best_combined_metric:
                 best_combined_metric = combined_metric
-                best_metrics = metrics 
-                best_epoch = epoch 
                 best_chpt_file = f"{chkpt_dir}/epoch_{epoch:06d}_loss_{combined_metric:07.6g}.pt"
                 torch.save(model_dict, best_chpt_file)
 
@@ -326,15 +315,7 @@ class Trainer:
         if best_chpt_file is not None:
             shutil.copy2(best_chpt_file, f'{self.work_dir}/best.pt')
 
-
-        return {
-            "best_combined_metric": float(best_combined_metric),
-            "best_epoch": int(best_epoch) if best_epoch is not None else None,
-            "best_metrics": best_metrics,
-            "last_metrics": metrics,
-        }
-
-
+        return metrics
 
 
     def zerograd(self):
@@ -434,7 +415,7 @@ class Trainer:
     def from_data(
         cls, csv_fn, 
         igpu=0, verbose=True, work_dir='.', 
-        train_ratio=0.8, validation_ratio=0.2, test_ratio=0.0, 
+        train_ratio=0.85, validation_ratio=0.15, test_ratio=0.0, 
         config_parameters = Parameters({}),
         logger = logging.getLogger("from_data"),
         loss_logger = logging.getLogger("losses")
@@ -445,7 +426,14 @@ class Trainer:
 
         # load training and validation dataset
         dl_train, dl_val, _ = get_dataloaders(
-            csv_fn, p.batch_size, (train_ratio, validation_ratio, test_ratio), n_aux=p.n_aux)
+            csv_fn,
+            p.batch_size,
+            (train_ratio, validation_ratio, test_ratio),
+            n_aux=p.n_aux,
+            shuffle=getattr(p, "shuffle_data", True),
+            random_seed=getattr(p, "random_seed", 0),
+        )
+        
 
 
         # Use GPU if possible
