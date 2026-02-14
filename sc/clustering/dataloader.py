@@ -6,7 +6,7 @@ import numpy as np
 
 
 class AuxSpectraDataset(Dataset):
-    def __init__(self, csv_fn, split_portion, train_val_test_ratios=(0.8, 0.15, 0.0),
+    def __init__(self, csv_fn, split_portion, train_val_test_ratios=(0.80, 0.15, 0.05),
              n_aux=0, transform=None, shuffle=True, random_seed=0):
         
 
@@ -69,7 +69,7 @@ class ToTensor(object):
         return torch.Tensor(sample)
 
 
-def get_dataloaders(csv_fn, batch_size, train_val_test_ratios=(0.8, 0.15, 0.0), n_aux=0,
+def get_dataloaders(csv_fn, batch_size, train_val_test_ratios=(0.80, 0.15, 0.05), n_aux=0,
                     shuffle=True, random_seed=0):
 
     transform_list = transforms.Compose([ToTensor()])
