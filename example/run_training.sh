@@ -1,3 +1,4 @@
+rm -r training 
 
 train_sc -c fix_config.yaml
 
