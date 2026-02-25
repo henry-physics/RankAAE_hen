@@ -3,8 +3,8 @@ data_file:  HB_data.csv
 trials: 3
 timeout: 10
 verbose: true
-max_epoch: 600
-batch_size: 32
+max_epoch: 400
+batch_size: 256
 
 gradient_reversal: true # if true, `alpha_flat_step` and `alpha_limit` must be specified.
 alpha_flat_step: 739 # Alpha will reach to `alpha_limit` and stay constant after `alpha_flat_step` ecpochs.
@@ -17,29 +17,31 @@ dis_noise: 0.56
 gen_beta: 1.1
 
 # Report Parameters
-output_name: report_HB_13_Quad
+output_name: report_%0%
 top_n: 8
-gpu: false
+gpu: true
 
 ## fit method 
-fit_method: Quadratic   # Linear, Quadratic, or Isotonic-regression 
+fit_method: Linear   # Linear, Quadratic, or Isotonic-regression 
 
 shuffle_data: true
 random_seed: 1
-aux_names: ["nu", "theta", "R", "q", "ring" ]
+aux_names: ["HB w out sum", "HB w in sum", "OH", "OH asym"]
 
 
 # Network Structure
-n_aux: 5
+n_aux: 4
 nstyle: 8
 ae_form: FC
-dim_in: 550
-dim_out: 550 # if ae_form==normal, dim_out is always set to 256
+dim_in: 292
+dim_out: 292 
+#dim_in: 367
+#dim_out: 367
 n_layers: 4 # FC only
 FC_discriminator_layers: 3 # used only if use_cnn_discriminator==false
 use_cnn_discriminator: false
 
-n_sampling: 5000
+n_sampling: 10000
 plot_residual: false 
 
 
@@ -60,7 +62,7 @@ spec_noise: 0.02
 use_flex_spec_target: true
 weight_decay: 0.01
 kendall_activation: true
-epoch_stop_smooth: 600
+epoch_stop_smooth: 400
 
 
 
