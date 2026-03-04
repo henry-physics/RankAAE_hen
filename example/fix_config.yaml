@@ -1,15 +1,17 @@
 # System settings
 data_file:  HB_data.csv 
-trials: 3
+trials: 10
 timeout: 10
 verbose: true
-max_epoch: 400
-batch_size: 256
+max_epoch: 2000
+batch_size: 1024
+
+calib_method: Isotonic
+calib_split: train
 
 gradient_reversal: true # if true, `alpha_flat_step` and `alpha_limit` must be specified.
-alpha_flat_step: 739 # Alpha will reach to `alpha_limit` and stay constant after `alpha_flat_step` ecpochs.
-# alpha_limit: 0.7172
-alpha_limit: 0.4172
+alpha_flat_step: 500 
+alpha_limit: 0.325
 decoder_activation: Softplus
 dis_beta: 1.1
 dis_dropout_rate: 0.056
@@ -17,7 +19,7 @@ dis_noise: 0.56
 gen_beta: 1.1
 
 # Report Parameters
-output_name: report_%0%
+output_name: report_%5%
 top_n: 8
 gpu: true
 
@@ -25,13 +27,13 @@ gpu: true
 fit_method: Linear   # Linear, Quadratic, or Isotonic-regression 
 
 shuffle_data: true
-random_seed: 1
-aux_names: ["HB w out sum", "HB w in sum", "OH", "OH asym"]
+random_seed: 45
+aux_names: ['hb in ','OH', 'OH asym', 'R', 'q', 'l2','r5r12','n inter','part56 w']
 
 
 # Network Structure
-n_aux: 4
-nstyle: 8
+n_aux: 9
+nstyle: 12
 ae_form: FC
 dim_in: 292
 dim_out: 292 
@@ -52,18 +54,17 @@ sch_patience: 100
 
 lr_base: 0.0008
 lr_ratio_Corr: 10
-lr_ratio_Mutual: 1
+lr_ratio_Mutual: 2
 lr_ratio_Reconn: 10
 lr_ratio_Smooth: 1
-lr_ratio_dis: 1
+lr_ratio_dis: 2
 lr_ratio_gen: 10
 optimizer_name: AdamW
 spec_noise: 0.02
 use_flex_spec_target: true
 weight_decay: 0.01
 kendall_activation: true
-epoch_stop_smooth: 400
-
+epoch_stop_smooth: 800
 
 
 
