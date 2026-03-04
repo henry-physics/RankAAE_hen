@@ -12,6 +12,9 @@ import sc.report.analysis as analysis
 import sc.report.analysis_new as analysis_new
 from sc.utils.parameter import Parameters
 from sc.clustering.dataloader import AuxSpectraDataset
+from matplotlib import pyplot as plt
+from matplotlib import cm, colors
+from cycler import cycler
 
 
 def sorting_algorithm(x):
@@ -225,6 +228,155 @@ def plot_report(test_ds, model, config=None, title="report", device=torch.device
 
     return fig
 
+
+def _safe_name(s: str) -> str:
+    # for filenames
+    return "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(s))
+
+
+def save_individual_style_plots(
+    test_ds,
+    decoder,
+    styles,                   # (N, n_styles)
+    out_dir,
+    prefix,
+    device=torch.device("cpu"),
+    n_sampling=10000,
+    amplitude=2,
+    n_spec=200,
+    plot_residual=False,
+):
+    os.makedirs(out_dir, exist_ok=True)
+
+    # viridis line colors (one per sampled spectrum)
+    vir = cm.get_cmap("viridis")
+    color_list = vir(np.linspace(0.0, 1.0, n_spec))
+
+    # colorbar mapping (low -> high)
+    norm = colors.Normalize(vmin=-amplitude, vmax=amplitude)
+    sm = cm.ScalarMappable(norm=norm, cmap=vir)
+    sm.set_array([])
+
+    energy_grid = test_ds.grid
+
+    for istyle in range(styles.shape[1]):
+        with plt.rc_context({
+            "font.size": 16,
+            "axes.titlesize": 18,
+            "axes.labelsize": 16,
+            "xtick.labelsize": 14,
+            "ytick.labelsize": 14,
+            "legend.fontsize": 14,
+            # This sets the line color cycle used by plot_spectra_variation (if it uses default cycle)
+            "axes.prop_cycle": cycler("color", color_list),
+        }):
+            fig, ax = plt.subplots(figsize=(9, 6), dpi=160, constrained_layout=True)
+
+            analysis.plot_spectra_variation(
+                decoder,
+                istyle,
+                true_range=True,
+                styles=styles,
+                amplitude=amplitude,
+                n_spec=n_spec,
+                n_sampling=n_sampling,
+                device=device,
+                energy_grid=energy_grid,
+                plot_residual=plot_residual,
+                ax=ax,
+                colors=color_list
+            )
+
+            cbar = fig.colorbar(sm, ax=ax, pad=0.02)
+
+            # remove all tick numbers/marks
+            cbar.set_ticks([])
+            cbar.ax.tick_params(length=0)
+            
+            # keep only this text
+            cbar.set_label("low to high", fontsize=16)
+
+
+            ax.set_title("")
+
+            out_path = os.path.join(out_dir, f"{prefix}_style_{istyle+1}.png")
+            fig.savefig(out_path, bbox_inches="tight")
+            plt.close(fig)
+
+
+def save_individual_descriptor_style_scatters(
+    styles,                  # (N, n_styles)
+    descriptors,             # (N, n_aux)
+    aux_names,
+    out_dir,
+    prefix,
+    fit_method="Linear",
+    fit=True,
+    max_points=None,
+):
+    if descriptors is None:
+        return
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    styles = np.asarray(styles)
+    descriptors = np.asarray(descriptors)
+
+    n_styles = styles.shape[1]
+    n_aux = descriptors.shape[1]
+
+    if aux_names is None:
+        aux_names = [f"AUX_{i+1}" for i in range(n_aux)]
+
+    # optional subsample
+    Npts = styles.shape[0]
+    if (max_points is not None) and (Npts > max_points):
+        idx = np.random.choice(Npts, size=max_points, replace=False)
+        styles = styles[idx]
+        descriptors = descriptors[idx]
+
+    for i_aux in range(n_aux):
+        aux_i_name = aux_names[i_aux] if i_aux < len(aux_names) else f"AUX_{i_aux+1}"
+        aux_i_name_safe = _safe_name(aux_i_name)
+
+        for j_style in range(n_styles):
+            with plt.rc_context({
+                "font.size": 16,
+                "axes.titlesize": 18,
+                "axes.labelsize": 16,
+                "xtick.labelsize": 14,
+                "ytick.labelsize": 14,
+            }):
+                fig, ax = plt.subplots(figsize=(7.5, 6), dpi=160, constrained_layout=True)
+
+                x = styles[:, j_style]
+                y = descriptors[:, i_aux]
+
+                # IMPORTANT: do NOT add any color mapping to scatter here.
+                acc = analysis.get_descriptor_style_correlation(
+                    x, y,
+                    ax=ax,
+                    choice=["Spearman", fit_method],
+                    fit=fit
+                )
+
+                sp = acc.get("Spearman", None)
+                r2 = acc.get(fit_method, {}).get("R2", None)
+                sp_str = "NA" if sp is None else f"{sp:.2f}"
+                r2_str = "NA" if r2 is None else f"{r2:.2f}"
+
+                ax.set_xlabel(f"style_{j_style+1}")
+                ax.set_ylabel(aux_i_name)
+                ax.set_title(f"style_{j_style+1} vs {aux_i_name}\nSpearman={sp_str}, {fit_method} R2={r2_str}")
+
+                out_path = os.path.join(
+                    out_dir,
+                    f"{prefix}_style_{j_style+1}_vs_{aux_i_name_safe}.png"
+                )
+                fig.savefig(out_path, bbox_inches="tight")
+                plt.close(fig)
+
+
     
 
 def save_evaluation_result(save_dir, file_name, model_results, save_spectra=False, top_n=5):
@@ -353,6 +505,35 @@ def main():
     encoder.eval()
     test_spec = torch.tensor(test_ds.spec, dtype=torch.float32, device=device)
     test_styles = encoder(test_spec).detach().cpu().numpy()
+
+
+    style_out_dir = os.path.join(work_dir, f"{config.output_name}_{job0}_style_plots")
+    save_individual_style_plots(
+        test_ds=test_ds,
+        decoder=top_model["Decoder"],
+        styles=test_styles,
+        out_dir=style_out_dir,
+        prefix=f"{config.output_name}_{job0}",
+        device=device,
+        n_sampling=int(getattr(config, "n_sampling", 10000)),
+        amplitude=2,
+        n_spec=200,
+        plot_residual=bool(getattr(config, "plot_residual", False)),
+    )
+
+    scatter_out_dir = os.path.join(work_dir, f"{config.output_name}_{job0}_scatter_plots")
+    save_individual_descriptor_style_scatters(
+        styles=test_styles,
+        descriptors=test_ds.aux,
+        aux_names=getattr(config, "aux_names", None),
+        out_dir=scatter_out_dir,
+        prefix=f"{config.output_name}_{job0}",
+        fit_method=getattr(config, "fit_method", "Linear"),
+        fit=True,
+        max_points=None,   # set e.g. 3000 if you want smaller files
+    )
+
+    
 
     fig_matrix = plot_descriptor_style_scatter_matrix(
         test_styles,
