@@ -491,6 +491,53 @@ def main():
         weights_only=False
     )
 
+###
+    from sc.report.calibration import fit_z_to_d_calibrator, save_calibrator
+
+    # Build TRAIN and VAL datasets from the same CSV used in training
+    train_ds = AuxSpectraDataset(
+        os.path.join(work_dir, file_name),
+        split_portion="train",
+        n_aux=config.n_aux,
+        shuffle=getattr(config, "shuffle_data", True),
+        random_seed=getattr(config, "random_seed", 0),
+    )
+    val_ds = AuxSpectraDataset(
+        os.path.join(work_dir, file_name),
+        split_portion="val",
+        n_aux=config.n_aux,
+        shuffle=getattr(config, "shuffle_data", True),
+        random_seed=getattr(config, "random_seed", 0),
+    )
+    
+    # choose split for calibration
+    calib_split = getattr(config, "calib_split", "train")  # "train" or "train+val"
+    if calib_split == "train":
+        fit_spec = train_ds.spec
+        fit_aux = train_ds.aux
+    elif calib_split == "train+val":
+        fit_spec = np.concatenate([train_ds.spec, val_ds.spec], axis=0)
+        fit_aux = np.concatenate([train_ds.aux, val_ds.aux], axis=0)
+    else:
+        raise ValueError("calib_split must be 'train' or 'train+val'")
+    
+    encoder = top_model["Encoder"]
+    encoder.eval()
+    
+    fit_spec_t = torch.tensor(fit_spec, dtype=torch.float32, device=device)
+    z_fit = encoder(fit_spec_t).detach().cpu().numpy()
+    
+    calib_method = getattr(config, "calib_method", "Isotonic")  # "Isotonic" or "Linear"
+    calibrator = fit_z_to_d_calibrator(z_fit, fit_aux, method=calib_method)
+    
+    calib_path = os.path.join(work_dir, f"{config.output_name}_{job0}_z2d_{calib_method}.pkl")
+    save_calibrator(calibrator, calib_path)
+    print("Saved calibrator to:", calib_path)
+
+
+    
+###
+    
     fig_top_model = plot_report(
         test_ds,
         top_model,
