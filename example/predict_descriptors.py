@@ -38,7 +38,6 @@ def _nan_r2(y, yhat):
     m = ~(np.isnan(y) | np.isnan(yhat))
     if np.sum(m) < 2:
         return np.nan
-    # r2_score can throw if y is constant; handle gracefully
     try:
         return float(r2_score(y[m], yhat[m]))
     except Exception:
@@ -55,21 +54,40 @@ def _nan_spearman(y, yhat):
     return float(c) if c is not None else np.nan
 
 
+def _infer_aux_names_from_csv(csv_path, n_aux):
+    """
+    Try to infer AUX column names from the CSV header.
+    Preference: columns starting with 'AUX_' (in file order).
+    Returns list[str] or None if cannot infer.
+    """
+    try:
+        df0 = pd.read_csv(csv_path, nrows=1)
+    except Exception:
+        return None
+
+    aux_cols = [c for c in df0.columns if str(c).startswith("AUX_")]
+    if len(aux_cols) >= n_aux:
+        return aux_cols[:n_aux]
+    return None
+
+
 def _as_id_cols(atom_index):
     """
     AuxSpectraDataset uses df.index.to_list() where index_col=[0,1] -> tuples.
     Return two columns if tuple-like, else one column.
+
+    We name them MPID and SITE (instead of id0/id1).
     """
     if atom_index is None or len(atom_index) == 0:
-        return {}, ["sample_id"]
+        return {}, ["MPID"]
 
     first = atom_index[0]
     if isinstance(first, tuple) and len(first) == 2:
         col0 = [str(x[0]) for x in atom_index]
         col1 = [str(x[1]) for x in atom_index]
-        return {"id0": col0, "id1": col1}, ["id0", "id1"]
+        return {"MPID": col0, "SITE": col1}, ["MPID", "SITE"]
     else:
-        return {"sample_id": [str(x) for x in atom_index]}, ["sample_id"]
+        return {"MPID": [str(x) for x in atom_index]}, ["MPID"]
 
 
 def main():
@@ -89,15 +107,16 @@ def main():
     args = ap.parse_args()
     device = torch.device(args.device)
 
-    aux_names = None
+    # Descriptor names (prefer: user-provided -> inferred from CSV header -> fallback AUX_1..)
     if args.aux_names is not None:
         aux_names = [s.strip() for s in args.aux_names.split(",") if s.strip()]
         if len(aux_names) != args.n_aux:
             raise ValueError(f"--aux_names must have length n_aux={args.n_aux}, got {len(aux_names)}")
     else:
-        aux_names = [f"AUX_{i+1}" for i in range(args.n_aux)]
+        inferred = _infer_aux_names_from_csv(args.test_csv, args.n_aux)
+        aux_names = inferred if inferred is not None else [f"AUX_{i+1}" for i in range(args.n_aux)]
 
-    # Load test set: if it's a pure test CSV, treat whole file as a single "train" split.
+    # Load test set: treat whole file as a single "train" split.
     test_ds = AuxSpectraDataset(
         args.test_csv,
         split_portion="train",
@@ -128,7 +147,6 @@ def main():
         raise ValueError(f"Shape mismatch: d_hat {d_hat.shape} vs d_true {d_true.shape}")
 
     # Baseline: constant predictor per descriptor.
-    # Prefer baseline stats saved in calibrator; else fallback to test mean (warn via print).
     baseline_mean = calibrator.get("baseline_mean", None)
     if baseline_mean is None:
         baseline_mean = calibrator.get("y_mean", None)
@@ -156,7 +174,6 @@ def main():
             if np.isnan(y) or np.isnan(yhat):
                 rmse_1 = np.nan
             else:
-                # for a single sample, "RMSE" == |error|
                 rmse_1 = float(np.sqrt((yhat - y) ** 2))
 
             if np.isnan(y) or np.isnan(yb):
@@ -164,9 +181,18 @@ def main():
             else:
                 rmse_base_1 = float(np.sqrt((yb - y) ** 2))
 
-            nrmse_1 = rmse_1 / (rmse_base_1 + args.eps) if (rmse_1 == rmse_1) and (rmse_base_1 == rmse_base_1) else np.nan
+            nrmse_1 = (
+                rmse_1 / (rmse_base_1 + args.eps)
+                if (rmse_1 == rmse_1) and (rmse_base_1 == rmse_base_1)
+                else np.nan
+            )
 
-            r = {
+            # Put MPID/SITE first
+            r = {}
+            for k in id_colnames:
+                r[k] = id_cols_dict[k][j]
+
+            r.update({
                 "sample_index": j,
                 "descriptor_index": i,
                 "descriptor_name": aux_names[i],
@@ -176,13 +202,27 @@ def main():
                 "rmse": rmse_1,
                 "baseline_rmse": rmse_base_1,
                 "normalized_rmse_vs_baseline": nrmse_1,
-            }
-            # add ID cols
-            for k in id_colnames:
-                r[k] = id_cols_dict[k][j]
+            })
             rows.append(r)
 
     df_per_sample = pd.DataFrame(rows)
+
+    # Ensure column order: MPID, SITE, then the rest
+    desired_cols = (
+        id_colnames
+        + [
+            "sample_index",
+            "descriptor_index",
+            "descriptor_name",
+            "true",
+            "pred",
+            "baseline_pred",
+            "rmse",
+            "baseline_rmse",
+            "normalized_rmse_vs_baseline",
+        ]
+    )
+    df_per_sample = df_per_sample[desired_cols]
 
     out_per_sample = f"{args.out_prefix}_per_sample.csv"
     df_per_sample.to_csv(out_per_sample, index=False)
@@ -202,7 +242,6 @@ def main():
         rmse_base = _nan_rmse(y, yb)
         mae_base = _nan_mae(y, yb)
 
-        # normalized metrics (lower is better)
         nrmse = rmse / (rmse_base + args.eps) if (rmse == rmse) and (rmse_base == rmse_base) else np.nan
         nmae = mae / (mae_base + args.eps) if (mae == mae) and (mae_base == mae_base) else np.nan
 
@@ -223,20 +262,22 @@ def main():
     df_summary = pd.DataFrame(summary)
 
     # Overall aggregates:
-    # 1) overall RMSE pooling all (descriptor-scaled) errors together (not scale-invariant)
     m_all = ~(np.isnan(d_true) | np.isnan(d_hat))
     overall_rmse = float(np.sqrt(np.mean((d_hat[m_all] - d_true[m_all]) ** 2))) if np.any(m_all) else np.nan
     overall_baseline_rmse = float(np.sqrt(np.mean((d_base[m_all] - d_true[m_all]) ** 2))) if np.any(m_all) else np.nan
-    overall_nrmse = overall_rmse / (overall_baseline_rmse + args.eps) if (overall_rmse == overall_rmse) and (overall_baseline_rmse == overall_baseline_rmse) else np.nan
+    overall_nrmse = (
+        overall_rmse / (overall_baseline_rmse + args.eps)
+        if (overall_rmse == overall_rmse) and (overall_baseline_rmse == overall_baseline_rmse)
+        else np.nan
+    )
 
-    # 2) scale-invariant overall: mean of per-descriptor normalized RMSE
     overall_mean_nrmse = float(np.nanmean(df_summary["normalized_rmse_vs_baseline"].to_numpy()))
 
     overall_row = {
         "descriptor_index": -1,
         "descriptor_name": "OVERALL",
         "rmse": overall_rmse,
-        "mae": float(np.nan),  # not defined in pooled way here (use per-descriptor if needed)
+        "mae": float(np.nan),
         "r2": float(np.nan),
         "spearman": float(np.nan),
         "baseline_rmse": overall_baseline_rmse,
@@ -251,7 +292,6 @@ def main():
     out_summary = f"{args.out_prefix}_summary.csv"
     df_summary.to_csv(out_summary, index=False)
 
-    # Also save a small JSON with key numbers (handy for pipelines)
     out_json = f"{args.out_prefix}_summary.json"
     payload = {
         "model_pt": os.path.abspath(args.model_pt),
