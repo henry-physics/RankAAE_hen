@@ -107,6 +107,8 @@ def evaluate_all_models(
     model_path, test_ds,
     device=torch.device('cpu'),
     fit_method="Linear",
+    optuna_trials=False,
+    model_filename="final.pt",
 ):
 
     '''
@@ -116,12 +118,24 @@ def evaluate_all_models(
     # evaluate model
     result = {}
     for job in os.listdir(model_path):
-        if job.startswith("job_"):
-            model = torch.load(
-                os.path.join(model_path, job, "final.pt"), 
-                map_location = device, weights_only=False
-            )
-            result[job] = evaluate_model(test_ds, model, device=device, fit_method=fit_method)
+        if optuna_trials:
+            if not job.startswith("trial_"):
+                continue
+            model_file = os.path.join(model_path, job, "training", "job_1", model_filename)
+        else:
+            if not job.startswith("job_"):
+                continue
+            model_file = os.path.join(model_path, job, model_filename)
+
+        if not os.path.exists(model_file):
+            continue
+
+        model = torch.load(
+            model_file,
+            map_location=device, weights_only=False
+        )
+        result[job] = evaluate_model(test_ds, model, device=device, fit_method=fit_method)
+        result[job]["ModelPath"] = model_file
                          
     return result
 
