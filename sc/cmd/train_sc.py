@@ -1,11 +1,16 @@
 import argparse
 import logging
 import os
+import re
 import signal
+import subprocess
+import sys
 import time
 
 import numpy as np
 import torch
+import optuna
+from optuna.importance import get_param_importances
 
 from sc.clustering.trainer import Trainer
 from sc.utils.logger import create_logger
@@ -83,6 +88,63 @@ def run_training(
     return metrics, time_used
 
 
+def _suggest_value(trial, name, spec, default_value):
+    if spec is None:
+        return default_value
+    low = spec.get("low", None)
+    high = spec.get("high", None)
+    if low is None or high is None:
+        return default_value
+    dtype = str(spec.get("type", "float")).lower()
+    step = spec.get("step", None)
+    log = bool(spec.get("log", False))
+    if dtype == "int":
+        value = trial.suggest_int(name, int(low), int(high), step=int(step or 1), log=log)
+    else:
+        value = trial.suggest_float(name, float(low), float(high), step=step, log=log)
+    if name in {"dis_beta", "gen_beta"}:
+        value = min(max(float(value), 0.0), 0.999)
+    return value
+
+
+def _build_sampler(optuna_cfg):
+    sampler_name = str(optuna_cfg.get("sampler", "TPESampler"))
+    seed = optuna_cfg.get("seed", None)
+    if sampler_name.lower() == "randomsampler":
+        return optuna.samplers.RandomSampler(seed=seed)
+    return optuna.samplers.TPESampler(seed=seed)
+
+
+def _maybe_regenerate_data(
+    *,
+    optuna_cfg: dict,
+    train_config: Parameters,
+    work_dir: str,
+    logger: logging.Logger,
+) -> str:
+    regen = bool(optuna_cfg.get("regenerate_data", False)) if isinstance(optuna_cfg, dict) else False
+    if not regen:
+        return os.path.join(work_dir, train_config.get("data_file", ""))
+
+    data_file = train_config.get("data_file", "")
+    out_name = os.path.basename(str(data_file)) if data_file else "HB_data_LW_npz.csv"
+    out_dir = os.path.join(work_dir, "hbgn_data")
+    os.makedirs(out_dir, exist_ok=True)
+
+    cmd = [
+        sys.executable,
+        os.path.join(work_dir, "5main.py"),
+        "--out_dir",
+        out_dir,
+        "--out_name",
+        out_name,
+    ]
+    logger.info(f"Regenerating data via 5main: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True, cwd=work_dir)
+
+    return os.path.join(out_dir, out_name)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -110,6 +172,7 @@ def main():
     trials = int(train_config.get("trials", 1))
     data_file = os.path.join(work_dir, train_config.get("data_file", None))
     timeout = train_config.get("timeout", 10)
+    optuna_cfg = train_config.get("optuna", None)
 
     # Main logger
     logger = create_logger(
@@ -122,6 +185,103 @@ def main():
     logger.info("Running with 1 process(es).")
 
     start = time.time()
+
+    if isinstance(optuna_cfg, dict) and optuna_cfg.get("enabled", False):
+        search_space = optuna_cfg.get("search_space", {})
+        target_params = [
+            "alpha_limit",
+            "dis_beta",
+            "dis_dropout_rate",
+            "dis_noise",
+            "gen_beta",
+            "dropout_rate",
+            "lr_base",
+            "spec_noise",
+            "weight_decay",
+            "s_R",
+            "s_theta",
+            "s_nu",
+            "alpha_R",
+            "alpha_theta",
+            "alpha_nu",
+            "R_max",
+            "theta_min",
+            "R0",
+            "theta0",
+            "nu0",
+        ]
+        sampler = _build_sampler(optuna_cfg)
+        direction = optuna_cfg.get("direction", "maximize")
+        n_trials = int(optuna_cfg.get("n_trials", trials))
+
+        def objective(trial):
+            param_updates = {}
+            for name in target_params:
+                spec = search_space.get(name, None)
+                param_updates[name] = _suggest_value(
+                    trial, name, spec, train_config.get(name, None)
+                )
+            tuned_config = Parameters(
+                {**train_config.to_dict(), **param_updates}
+            )
+            trial_data_file = _maybe_regenerate_data(
+                optuna_cfg=optuna_cfg,
+                train_config=train_config,
+                work_dir=work_dir,
+                logger=logger,
+            )
+            trial_work_dir = os.path.join(
+                work_dir, "optuna", f"trial_{trial.number + 1}"
+            )
+            metrics, _ = run_training(
+                job_number=0,
+                work_dir=trial_work_dir,
+                train_config=tuned_config,
+                verbose=verbose,
+                data_file=trial_data_file,
+                timeout_hours=timeout,
+                logger=logger,
+            )
+            combined_metric = (
+                np.array(Trainer.metric_weights) * np.array(metrics)
+            ).sum()
+            trial.set_user_attr("metrics", metrics)
+            return combined_metric
+
+        logger.info(
+            f"Optuna enabled. Running {n_trials} trial(s) with direction={direction}."
+        )
+        study = optuna.create_study(direction=direction, sampler=sampler)
+        study.optimize(objective, n_trials=n_trials)
+        best = study.best_trial
+        logger.info(f"Optuna best value: {best.value}")
+        logger.info(f"Optuna best params: {best.params}")
+        try:
+            importances = get_param_importances(study)
+            logger.info("Optuna parameter importances (desc):")
+            for k, v in importances.items():
+                logger.info(f"  {k}: {v:.6f}")
+            with open(os.path.join(work_dir, "optuna_importance.yaml"), "w") as f:
+                f.write("param_importance:\n")
+                for k, v in importances.items():
+                    f.write(f"  {k}: {v}\n")
+            with open(os.path.join(work_dir, "optuna_importance.csv"), "w") as f:
+                f.write("param,importance\n")
+                for k, v in importances.items():
+                    f.write(f"{k},{v}\n")
+        except Exception as e:
+            logger.info(f"Optuna importance computation failed: {e}")
+        with open(os.path.join(work_dir, "optuna_best.yaml"), "w") as f:
+            f.write("best_value: " + str(best.value) + "\n")
+            f.write("best_params:\n")
+            for k, v in best.params.items():
+                f.write(f"  {k}: {v}\n")
+        end = time.time()
+        logger.info(
+            f"Total time used: {end - start:.2f}s for {n_trials} optuna trials."
+        )
+        logger.info("END\n\n")
+        return
 
     results = []
     for trial in range(trials):
