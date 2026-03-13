@@ -73,7 +73,7 @@ class Trainer:
         bce_lgt_loss = nn.BCEWithLogitsLoss().to(self.device)
 
         # train network
-        best_combined_metric = 10.0 # Initialize a guess for best combined metric.
+        best_combined_metric = -np.inf  # Initialize to lowest possible metric.
         chkpt_dir = f"{self.work_dir}/checkpoints"
         if not os.path.exists(chkpt_dir):
             os.makedirs(chkpt_dir, exist_ok=True)
@@ -297,7 +297,7 @@ class Trainer:
             metrics = [min(style_shapiro), recon_loss_val.item(), avg_mutual_info, style_coupling,
                        aux_loss_val.item() if aux_in is not None else 0]
             
-            combined_metric = - (np.array(self.metric_weights) * np.array(metrics)).sum()
+            combined_metric = (np.array(self.metric_weights) * np.array(metrics)).sum()
             if combined_metric > best_combined_metric:
                 best_combined_metric = combined_metric
                 best_chpt_file = f"{chkpt_dir}/epoch_{epoch:06d}_loss_{combined_metric:07.6g}.pt"
@@ -415,7 +415,7 @@ class Trainer:
     def from_data(
         cls, csv_fn, 
         igpu=0, verbose=True, work_dir='.', 
-        train_ratio=0.85, validation_ratio=0.15, test_ratio=0.0, 
+        train_ratio=0.80, validation_ratio=0.15, test_ratio=0.05, 
         config_parameters = Parameters({}),
         logger = logging.getLogger("from_data"),
         loss_logger = logging.getLogger("losses")
