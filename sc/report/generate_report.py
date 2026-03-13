@@ -432,6 +432,7 @@ def main():
     
 
     jobs_dir = os.path.join(work_dir, "training")
+    optuna_dir = os.path.join(work_dir, "optuna")
     file_name = config.data_file
     
     device = torch.device("cpu") # device is cpu by default
@@ -458,11 +459,38 @@ def main():
 
     plot_job = getattr(config, "plot_job", None)
     aux_names = getattr(config, "aux_names", None)
+    use_best_model = getattr(config, "use_best_model", False)
+    model_filename = "best.pt" if use_best_model else "final.pt"
+
+    use_optuna = False
+    if os.path.isdir(optuna_dir):
+        for entry in os.listdir(optuna_dir):
+            if entry.startswith("trial_"):
+                model_file = os.path.join(optuna_dir, entry, "training", "job_1", "final.pt")
+                if os.path.exists(model_file):
+                    use_optuna = True
+                    break
 
     if plot_job is not None:
         sorted_jobs = [plot_job]
     else:
-        model_results = analysis.evaluate_all_models(jobs_dir, test_ds, device=device,fit_method=fit_method)
+        if use_optuna:
+            model_results = analysis.evaluate_all_models(
+                optuna_dir,
+                test_ds,
+                device=device,
+                fit_method=fit_method,
+                optuna_trials=True,
+                model_filename=model_filename
+            )
+        else:
+            model_results = analysis.evaluate_all_models(
+                jobs_dir,
+                test_ds,
+                device=device,
+                fit_method=fit_method,
+                model_filename=model_filename
+            )
         model_results, sorted_jobs, fig_model_selection = analysis.sort_all_models(
             model_results,
             plot_score=True,
@@ -485,11 +513,12 @@ def main():
     job0 = sorted_jobs[0]
     output_path_best_model = os.path.join(work_dir, f"{config.output_name}_{job0}.png")
 
-    top_model = torch.load(
-        os.path.join(jobs_dir, job0, "final.pt"),
-        map_location=device,
-        weights_only=False
-    )
+    if plot_job is not None:
+        model_path = os.path.join(jobs_dir, job0, model_filename)
+    else:
+        model_path = model_results[job0].get("ModelPath", os.path.join(jobs_dir, job0, model_filename))
+
+    top_model = torch.load(model_path, map_location=device, weights_only=False)
 
 ###
     from sc.report.calibration import fit_z_to_d_calibrator, save_calibrator
