@@ -1,26 +1,26 @@
 # System settings
 data_file:  HB_data.csv 
-trials: 10
+trials: 4
 timeout: 10
 verbose: true
-max_epoch: 2000
-batch_size: 1024
+max_epoch: 500
+batch_size: 512
 
 calib_method: Isotonic
 calib_split: train
 
 gradient_reversal: true # if true, `alpha_flat_step` and `alpha_limit` must be specified.
 alpha_flat_step: 500 
-alpha_limit: 0.325
+alpha_limit: 0.2855
 decoder_activation: Softplus
 dis_beta: 1.1
-dis_dropout_rate: 0.056
-dis_noise: 0.56
+dis_dropout_rate: 0.12575906823638203
+dis_noise: 0.6608489470488161
 gen_beta: 1.1
 
 # Report Parameters
-output_name: report_%5%
-top_n: 8
+output_name: report_%0%
+top_n: 30
 gpu: true
 
 ## fit method 
@@ -28,17 +28,15 @@ fit_method: Linear   # Linear, Quadratic, or Isotonic-regression
 
 shuffle_data: true
 random_seed: 45
-aux_names: ['hb in ','OH', 'OH asym', 'R', 'q', 'l2','r5r12','n inter','part56 w']
+aux_names: ['a','b','c']
 
 
 # Network Structure
-n_aux: 9
-nstyle: 12
+n_aux: 3
+nstyle: 7
 ae_form: FC
 dim_in: 292
 dim_out: 292 
-#dim_in: 367
-#dim_out: 367
 n_layers: 4 # FC only
 FC_discriminator_layers: 3 # used only if use_cnn_discriminator==false
 use_cnn_discriminator: false
@@ -48,23 +46,41 @@ plot_residual: false
 
 
 # Training Parameters
-dropout_rate: 0.1
+dropout_rate: 0.059704236144813086
 sch_factor: 0.1
 sch_patience: 100
 
-lr_base: 0.0008
+lr_base: 0.0019861942882280375
 lr_ratio_Corr: 10
-lr_ratio_Mutual: 2
+lr_ratio_Mutual: 1
 lr_ratio_Reconn: 10
 lr_ratio_Smooth: 1
-lr_ratio_dis: 2
+lr_ratio_dis: 1
 lr_ratio_gen: 10
 optimizer_name: AdamW
 spec_noise: 0.02
 use_flex_spec_target: true
-weight_decay: 0.01
+weight_decay: 0.00010275605161923064
 kendall_activation: true
-epoch_stop_smooth: 800
+epoch_stop_smooth: 500
 
 
-
+### !!!
+use_best_model: True
+### !!!
+optuna:
+  enabled: False
+  n_trials: 100
+  direction: maximize
+  seed: 42
+  sampler: TPESampler
+  search_space:
+    alpha_limit: {low: 0.1, high: 0.6, type: float}
+    #dis_beta: {low: 0.5, high: 0.999, type: float}
+    dis_dropout_rate: {low: 0.01, high: 0.2, type: float}
+    dis_noise: {low: 0.01, high: 1.0, type: float}
+    #gen_beta: {low: 0.5, high: 0.999, type: float}
+    dropout_rate: {low: 0.01, high: 0.3, type: float}
+    lr_base: {low: 0.00001, high: 0.003, type: float, log: true}
+    spec_noise: {low: 0.01, high: 0.1, type: float}
+    weight_decay: {low: 0.00001, high: 0.01, type: float, log: true}
